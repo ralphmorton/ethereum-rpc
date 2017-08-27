@@ -1,0 +1,7 @@
+resolver: lts-9.1
+packages:
+- '.'
+- location:
+    git: https://github.com/ralphmorton/context.git
+    commit: 0028fa83a42d2979788977d9a3ee20a3bbf369f7
+  extra-dep: true

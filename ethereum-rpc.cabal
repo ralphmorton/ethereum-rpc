@@ -1,0 +1,43 @@
+name:                ethereum-rpc
+version:             0.1.0
+-- synopsis:
+-- description:
+homepage:            https://github.com/ralphmorton/ethereum-rpc#readme
+license:             BSD3
+license-file:        LICENSE
+author:              Ralph Morton
+maintainer:          ralphmorton@gmail.com
+copyright:           Ralph Morton 2017
+category:            Web
+build-type:          Simple
+extra-source-files:  README.md
+cabal-version:       >=1.10
+
+library
+  hs-source-dirs:      src
+  exposed-modules:     Ethereum.RPC
+  other-modules:       Ethereum.RPC.Data
+  build-depends:       base >= 4.7 && < 5
+                     , mtl
+                     , transformers
+                     , exceptions
+                     , bytestring
+                     , base16-bytestring
+                     , text
+                     , time
+                     , network
+                     , stm
+                     , lens
+                     , containers
+                     , unliftio
+                     , context
+                     , http-conduit
+                     , http-types
+                     , aeson
+                     , attoparsec
+  default-language:    Haskell2010
+  ghc-options:         -O2 -Wall -Werror
+
+source-repository head
+  type:     git
+  location: https://github.com/ralphmorton/ethereum-rpc
