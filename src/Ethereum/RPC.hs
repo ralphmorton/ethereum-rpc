@@ -41,7 +41,17 @@ module Ethereum.RPC (
     eth_getBlockByNumber',
     eth_getTransactionByHash,
     eth_getTransactionByBlockHashAndIndex,
-    eth_getTransactionByBlockNumberAndIndex
+    eth_getTransactionByBlockNumberAndIndex,
+    eth_getTransactionReceipt,
+    eth_getUncleByBlockHashAndIndex,
+    eth_getUncleByBlockNumberAndIndex,
+    eth_newFilter,
+    eth_newBlockFilter,
+    eth_newPendingTransactionFilter,
+    eth_uninstallFilter,
+    eth_getFilterChanges,
+    eth_getFilterLogs,
+    eth_getLogs
 ) where
 
 import Ethereum.RPC.Data
@@ -177,6 +187,36 @@ eth_getTransactionByBlockHashAndIndex hash ix = rpc "eth_getTransactionByBlockHa
 eth_getTransactionByBlockNumberAndIndex :: RpcC c m => BlockRef -> Quantity -> m (CallResult TransactionOut)
 eth_getTransactionByBlockNumberAndIndex block ix = rpc "eth_getTransactionByBlockNumberAndIndex" [toJSON block, toJSON ix]
 
+eth_getTransactionReceipt :: RpcC c m => Hash -> m (CallResult TransactionReceipt)
+eth_getTransactionReceipt hash = rpc "eth_getTransactionReceipt" [toJSON hash]
+
+eth_getUncleByBlockHashAndIndex :: RpcC c m => Hash -> Quantity -> m (CallResult (Block TransactionOut))
+eth_getUncleByBlockHashAndIndex block ix = rpc "eth_getUncleByBlockHashAndIndex" [toJSON block, toJSON ix]
+
+eth_getUncleByBlockNumberAndIndex :: RpcC c m => BlockRef -> Quantity -> m (CallResult (Block TransactionOut))
+eth_getUncleByBlockNumberAndIndex block ix = rpc "eth_getUncleByBlockNumberAndIndex" [toJSON block, toJSON ix]
+
+eth_newFilter :: RpcC c m => Filter -> m (CallResult Quantity)
+eth_newFilter f = rpc "eth_newFilter" [toJSON f]
+
+eth_newBlockFilter :: RpcC c m => m (CallResult Quantity)
+eth_newBlockFilter = rpc "eth_newBlockFilter" []
+
+eth_newPendingTransactionFilter :: RpcC c m => m (CallResult Quantity)
+eth_newPendingTransactionFilter = rpc "eth_newPendingTransactionFilter" []
+
+eth_uninstallFilter :: RpcC c m => Quantity -> m (CallResult Bool)
+eth_uninstallFilter filterID = rpc "eth_uninstallFilter" [toJSON filterID]
+
+eth_getFilterChanges :: RpcC c m => Quantity -> m (CallResult FilterResult)
+eth_getFilterChanges filterID = rpc "eth_getFilterChanges" [toJSON filterID]
+
+eth_getFilterLogs :: RpcC c m => Quantity -> m (CallResult FilterResult)
+eth_getFilterLogs filterID = rpc "eth_getFilterLogs" [toJSON filterID]
+
+eth_getLogs :: RpcC c m => Filter -> m (CallResult FilterResult)
+eth_getLogs f = rpc "eth_getLogs" [toJSON f]
+
 --
 --
 --
@@ -223,6 +263,11 @@ data CallResult a
     | Error RpcError
     | ResponseParseFailure ByteString
     deriving Show
+
+instance Functor CallResult where
+    fmap f (Success a) = Success (f a)
+    fmap _ (Error e) = Error e
+    fmap _ (ResponseParseFailure s) = ResponseParseFailure s
 
 data RpcRequest = RpcRequest {
     reqID :: Int,

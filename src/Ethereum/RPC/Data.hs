@@ -17,11 +17,14 @@ module Ethereum.RPC.Data (
     SyncState(..),
     TransactionIn(..),
     TransactionOut(..),
+    TransactionReceipt(..),
     Call(..),
     Filter(..),
     BlockTag(..),
     BlockRef(..),
-    Block(..)
+    Block(..),
+    Compiler(..),
+    FilterResult(..)
 ) where
 
 import Prelude hiding (take)
@@ -329,6 +332,43 @@ instance FromJSON TransactionOut where
     parseJSON _ = mzero
 
 --
+-- TransactionReceipt
+--
+
+data TransactionReceipt = TransactionReceipt {
+    transRecTransactionHash :: Hash,
+    transRecTransactionIndex :: Quantity,
+    transRecBlockHash :: Hash,
+    transRecBlockNumber :: Quantity,
+    transRecCumulativeGasUsed :: Quantity,
+    transRecGasUsed :: Quantity,
+    transRecContractAddress :: Maybe Address,
+    transRecLogs :: [Event]
+} deriving (Eq, Show)
+
+instance FromJSON TransactionReceipt where
+    parseJSON (Object v) = do
+        transactionHash <- v .: "transactionHash"
+        transactionIndex <- v .: "transactionIndex"
+        blockHash' <- v .: "blockHash"
+        blockNumber' <- v .: "blockNumber"
+        cumulativeGasUsed <- v .: "cumulativeGasUsed"
+        gasUsed <- v .: "gasUsed"
+        contractAddress <- v .:? "contractAddress"
+        logs <- v .: "logs"
+        pure TransactionReceipt {
+            transRecTransactionHash = transactionHash,
+            transRecTransactionIndex = transactionIndex,
+            transRecBlockHash = blockHash',
+            transRecBlockNumber = blockNumber',
+            transRecCumulativeGasUsed = cumulativeGasUsed,
+            transRecGasUsed = gasUsed,
+            transRecContractAddress = contractAddress,
+            transRecLogs = logs
+        }
+    parseJSON _ = mzero
+
+--
 -- Call
 --
 
@@ -357,17 +397,17 @@ instance ToJSON Call where
 --
 
 data Filter = Filter {
-    filterFromBlock :: Maybe (Either Quantity BlockTag),
-    filterToBlock :: Maybe (Either Quantity BlockTag),
+    filterFromBlock :: Maybe BlockRef,
+    filterToBlock :: Maybe BlockRef,
     filterAddress :: Maybe (Either Address [Address]),
     filterTopics :: Maybe [Unformatted]
 } deriving (Eq, Show)
 
 instance ToJSON Filter where
-    toJSON f = object ["from" .= from, "to" .= to, "address" .= addr, "topics" .= topics]
+    toJSON f = object ["fromBlock" .= from, "toBlock" .= to, "address" .= addr, "topics" .= topics]
         where
-        from = encodeEither <$> filterFromBlock f
-        to = encodeEither <$> filterToBlock f
+        from = filterFromBlock f
+        to = filterToBlock f
         addr = encodeEither <$> filterAddress f
         topics = filterTopics f
 
@@ -478,6 +518,36 @@ instance FromJSON a => FromJSON (Block a) where
             blockUncles = uncles
         }
     parseJSON _ = mzero
+
+--
+-- Compiler
+--
+
+data Compiler
+    = Solidity
+    | LLL
+    | Serpent
+    | UnknownCompiler
+    deriving (Eq, Show)
+
+instance FromJSON Compiler where
+    parseJSON (String "solidity") = pure Solidity
+    parseJSON (String "lll") = pure LLL
+    parseJSON (String "serpent") = pure Serpent
+    parseJSON _ = mzero
+
+--
+-- FilterResult
+--
+
+data FilterResult
+    = Hashes [Hash]
+    | Events [Event]
+    deriving (Eq, Show)
+
+instance FromJSON FilterResult where
+    parseJSON v = (Hashes <$> parseJSON v) <|> (Events <$> parseJSON v)
+
 
 --
 -- Utility
