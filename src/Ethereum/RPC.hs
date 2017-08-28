@@ -251,7 +251,7 @@ buildRpc mthod params = do
         }
 
 --
--- Utility
+--
 --
 
 newtype NodeURL = NodeURL String

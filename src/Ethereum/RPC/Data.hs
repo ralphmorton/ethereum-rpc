@@ -80,7 +80,7 @@ instance Monoid Unformatted where
     mappend (Unformatted v1) (Unformatted v2) = Unformatted (v1 <> v2)
 
 instance Show Unformatted where
-    show (Unformatted v) = "Unformatted { unUnformatted = " <> show ("0x" <> B16.encode v) <> " }"
+    show (Unformatted v) = "Unformatted { fromEthHexString = " <> show ("0x" <> B16.encode v) <> " }"
 
 instance ToJSON Unformatted where
     toJSON (Unformatted v) = String ("0x" <> hex)
@@ -106,7 +106,7 @@ newtype Address
     deriving Eq
 
 instance Show Address where
-    show (Address a) = "Address { unAddress = " <> show ("0x" <> B16.encode a) <> " }"
+    show (Address a) = "Address { fromEthHexString = " <> show ("0x" <> B16.encode a) <> " }"
 
 instance Marshal Address where
     fromUnformatted = Address <$> take 20
@@ -138,7 +138,7 @@ newtype Hash
     deriving Eq
 
 instance Show Hash where
-    show (Hash h) = "Hash { unHash = " <> show ("0x" <> B16.encode h) <> " }"
+    show (Hash h) = "Hash { fromEthHexString = " <> show ("0x" <> B16.encode h) <> " }"
 
 instance Marshal Hash where
     fromUnformatted = Hash <$> take 32
