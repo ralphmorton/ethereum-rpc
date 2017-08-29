@@ -1,4 +1,8 @@
+{-# LANGUAGE DataKinds #-}
+{-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE TypeOperators #-}
 
 module Ethereum.RPC.Data (
     EthHex(..),
@@ -7,6 +11,9 @@ module Ethereum.RPC.Data (
     unQuantity,
     mkQuantity,
     Unformatted(..),
+    Bytes,
+    unBytes,
+    mkBytes,
     Address,
     unAddress,
     mkAddress,
@@ -32,7 +39,7 @@ module Ethereum.RPC.Data (
 import Prelude hiding (take)
 
 import Control.Applicative ((<|>))
-import Control.Monad (mzero)
+import Control.Monad (mzero, void, when)
 import Data.Aeson hiding (decode, encode)
 import Data.Attoparsec.ByteString hiding (takeWhile)
 import Data.Bits
@@ -42,7 +49,9 @@ import qualified Data.ByteString.Char8 as B
 import Data.Int
 import Data.Monoid (Monoid, (<>))
 import qualified Data.Text as T
+import qualified Data.Text.Encoding as T
 import Data.Word
+import GHC.TypeLits
 import Numeric (readHex, showHex)
 
 class EthHex a where
@@ -94,7 +103,7 @@ instance Monoid Unformatted where
     mappend (Unformatted v1) (Unformatted v2) = Unformatted (v1 <> v2)
 
 instance Show Unformatted where
-    show u = "Unformatted { fromEthHexString = " <> T.unpack (toEthHexString u) <> " }"
+    show u = "Unformatted { toEthHexString = " <> T.unpack (toEthHexString u) <> " }"
 
 instance EthHex Unformatted where
     toEthHexString = T.toLower . T.pack . B.unpack . ("0x"<>) . B16.encode . unUnformatted
@@ -113,7 +122,33 @@ instance FromJSON Unformatted where
     parseJSON (String s) = maybe mzero pure (fromEthHexString s)
     parseJSON _ = mzero
 
+--
+-- Bytes
+--
 
+newtype Bytes (n :: Nat)
+    = Bytes { unBytes :: BS.ByteString }
+    deriving (Eq, Show)
+
+instance (KnownNat n, n <= 31) => Marshal (Bytes n) where
+    decode = do
+        let proxy = undefined :: KnownNat n => Bytes n
+        let n = fromIntegral (natVal proxy)
+        bs <- take n
+        when (n > 0) (void . take $ 32 - n)
+        pure (setBytes proxy bs)
+    encode = padR 32 . unBytes
+
+mkBytes :: (KnownNat n, n <= 31) => BS.ByteString -> Maybe (Bytes n)
+mkBytes bs
+    | BS.length bs == n = Just (setBytes proxy bs)
+    | otherwise = Nothing
+    where
+    proxy = undefined :: KnownNat n => Bytes n
+    n = fromIntegral (natVal proxy)
+
+setBytes :: Bytes n -> BS.ByteString -> Bytes n
+setBytes _ = Bytes
 
 --
 -- Address
@@ -124,7 +159,7 @@ newtype Address
     deriving Eq
 
 instance Show Address where
-    show a = "Address { fromEthHexString = " <> T.unpack (toEthHexString a) <> " }"
+    show a = "Address { toEthHexString = " <> T.unpack (toEthHexString a) <> " }"
 
 instance EthHex Address where
     toEthHexString = T.toLower . T.pack . B.unpack . ("0x"<>) . B16.encode . unAddress
@@ -158,7 +193,7 @@ newtype Hash
     deriving Eq
 
 instance Show Hash where
-    show h = "Hash { fromEthHexString = " <> T.unpack (toEthHexString h) <> " }"
+    show h = "Hash { toEthHexString = " <> T.unpack (toEthHexString h) <> " }"
 
 instance EthHex Hash where
     toEthHexString = T.toLower . T.pack . B.unpack . ("0x"<>) . B16.encode . unHash
@@ -578,6 +613,28 @@ instance FromJSON FilterResult where
 -- Marshal instances
 --
 
+instance Marshal a => Marshal [a] where
+    decode = do
+        n <- fromIntegral . bs2i <$> take 32
+        count n decode
+    encode ax = encodeInt (length ax) <> mconcat (encode <$> ax)
+
+instance Marshal B.ByteString where
+    decode = do
+        n <- fromIntegral . bs2i <$> take 32
+        bs <- take n
+        void (take $ calculatePad n)
+        pure bs
+        where
+        calculatePad n
+            | mod n 32 == 0 = 0
+            | otherwise = 32 - mod n 32
+    encode bs = encodeInt (BS.length bs) <> padR 32 bs
+
+instance Marshal T.Text where
+    decode = T.decodeUtf8 <$> decode
+    encode = encode . T.encodeUtf8
+
 instance Marshal Bool where
     decode = do
         n <- (decode :: Parser Word8)
@@ -608,7 +665,7 @@ instance Marshal Int32 where
 
 instance Marshal Int64 where
     decode = do
-        bs <- take 64
+        bs <- take 32
         (pure . fromIntegral) (bs2i bs)
     encode = encodeInt
 
@@ -632,7 +689,7 @@ instance Marshal Word32 where
 
 instance Marshal Word64 where
     decode = do
-        bs <- take 64
+        bs <- take 32
         (pure . fromIntegral) (bs2i bs)
     encode = encodeInt
 
@@ -644,8 +701,13 @@ encodeInt i
 
 padL :: Int -> BS.ByteString -> BS.ByteString
 padL n bs
-    | BS.length bs < n = BS.replicate (n - BS.length bs) 0 <> bs
-    | otherwise = BS.replicate (n - mod n (BS.length bs)) 0 <> bs
+    | mod (BS.length bs) n == 0 = bs
+    | otherwise = BS.replicate (n - mod (BS.length bs) n) 0 <> bs
+
+padR :: Int -> BS.ByteString -> BS.ByteString
+padR n bs
+    | mod (BS.length bs) n == 0 = bs
+    | otherwise = bs <> BS.replicate (n - mod (BS.length bs) n) 0
 
 bs2i :: BS.ByteString -> Integer
 bs2i b
