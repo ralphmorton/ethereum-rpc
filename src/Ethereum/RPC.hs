@@ -63,7 +63,8 @@ import Control.Monad (mzero)
 import Control.Monad.Catch (MonadThrow)
 import Control.Monad.Reader (MonadReader)
 import Control.Monad.Trans (MonadIO, liftIO)
-import Data.Aeson hiding (Error, Success)
+import Data.Aeson hiding (Error, Success, decode, encode)
+import qualified Data.Aeson as A
 import Data.ByteString.Lazy.Char8 (ByteString)
 import Data.Context
 import Data.Proxy
@@ -230,10 +231,10 @@ rpc mthod params = do
     rsp <- flip httpLbs mgr req {
             method = methodPost,
             requestHeaders = [("Content-Type", "application/json")],
-            requestBody = RequestBodyLBS $ encode rpcReq
+            requestBody = RequestBodyLBS (A.encode rpcReq)
         }
     let dta = responseBody rsp
-    case decode dta of
+    case A.decode dta of
         Just (RpcSuccess v) -> pure (Success v)
         Just (RpcFailure e) -> pure (Error e)
         Nothing -> pure (ResponseParseFailure dta)

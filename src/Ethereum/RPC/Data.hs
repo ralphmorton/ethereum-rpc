@@ -3,7 +3,9 @@
 module Ethereum.RPC.Data (
     EthHex(..),
     Marshal(..),
-    Quantity(..),
+    Quantity,
+    unQuantity,
+    mkQuantity,
     Unformatted(..),
     Address,
     unAddress,
@@ -31,21 +33,25 @@ import Prelude hiding (take)
 
 import Control.Applicative ((<|>))
 import Control.Monad (mzero)
-import Data.Aeson
-import Data.Attoparsec.ByteString
+import Data.Aeson hiding (decode, encode)
+import Data.Attoparsec.ByteString hiding (takeWhile)
+import Data.Bits
 import qualified Data.ByteString.Base16 as B16
-import qualified Data.ByteString.Lazy.Char8 as BL
+import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as B
+import Data.Int
 import Data.Monoid (Monoid, (<>))
 import qualified Data.Text as T
+import Data.Word
 import Numeric (readHex, showHex)
 
 class EthHex a where
+    toEthHexString :: a -> T.Text
     fromEthHexString :: T.Text -> Maybe a
 
 class Marshal a where
-    fromUnformatted :: Parser a
-    toUnformatted :: a -> Unformatted
+    decode :: Parser a
+    encode :: a -> BS.ByteString
 
 --
 -- Quantity
@@ -55,17 +61,25 @@ newtype Quantity
     = Quantity { unQuantity :: Integer }
     deriving (Eq, Ord, Show)
 
-instance ToJSON Quantity where
-    toJSON (Quantity q) = String ("0x" <> hex)
-        where hex = (T.toLower . T.pack) (showHex q "")
-
-instance FromJSON Quantity where
-    parseJSON (String s) | T.isPrefixOf "0x" s = do
+instance EthHex Quantity where
+    toEthHexString = T.toLower . T.pack . ("0x"<>) . flip showHex "" . unQuantity
+    fromEthHexString s | T.isPrefixOf "0x" s = do
         let encoded = drop 2 (T.unpack s)
         case readHex encoded of
             [(q, "")] -> pure (Quantity q)
             _ -> mzero
+    fromEthHexString _ = mzero
+
+instance ToJSON Quantity where
+    toJSON q = String (toEthHexString q)
+
+instance FromJSON Quantity where
+    parseJSON (String s) = maybe mzero pure (fromEthHexString s)
     parseJSON _ = mzero
+
+mkQuantity :: Integer -> Maybe Quantity
+mkQuantity i | i >= 0 = Just (Quantity i)
+mkQuantity _ = mzero
 
 --
 -- Unformatted
@@ -80,22 +94,26 @@ instance Monoid Unformatted where
     mappend (Unformatted v1) (Unformatted v2) = Unformatted (v1 <> v2)
 
 instance Show Unformatted where
-    show (Unformatted v) = "Unformatted { fromEthHexString = " <> show ("0x" <> B16.encode v) <> " }"
+    show u = "Unformatted { fromEthHexString = " <> T.unpack (toEthHexString u) <> " }"
+
+instance EthHex Unformatted where
+    toEthHexString = T.toLower . T.pack . B.unpack . ("0x"<>) . B16.encode . unUnformatted
+    fromEthHexString s | T.isPrefixOf "0x" s = do
+        let encoded = (B.pack . drop 2) (T.unpack s)
+        case B16.decode encoded of
+            (v, "") -> pure (Unformatted v)
+            _ -> mzero
+    fromEthHexString _ = mzero
 
 instance ToJSON Unformatted where
     toJSON (Unformatted v) = String ("0x" <> hex)
         where hex = (T.pack . B.unpack) (B16.encode v)
 
 instance FromJSON Unformatted where
-    parseJSON (String s) | T.isPrefixOf "0x" s = do
-        let encoded = (B.pack . drop 2) (T.unpack s)
-        case B16.decode encoded of
-            (v, "") -> pure (Unformatted v)
-            _ -> mzero
+    parseJSON (String s) = maybe mzero pure (fromEthHexString s)
     parseJSON _ = mzero
 
-instance EthHex Unformatted where
-    fromEthHexString = decode . BL.pack . show
+
 
 --
 -- Address
@@ -106,24 +124,26 @@ newtype Address
     deriving Eq
 
 instance Show Address where
-    show (Address a) = "Address { fromEthHexString = " <> show ("0x" <> B16.encode a) <> " }"
+    show a = "Address { fromEthHexString = " <> T.unpack (toEthHexString a) <> " }"
 
-instance Marshal Address where
-    fromUnformatted = Address <$> take 20
-    toUnformatted = Unformatted . unAddress
-
-instance ToJSON Address where
-    toJSON = toJSON . toUnformatted
-
-instance FromJSON Address where
-    parseJSON v = do
-        uf <- parseJSON v
-        case parse fromUnformatted (unUnformatted uf) of
+instance EthHex Address where
+    toEthHexString = T.toLower . T.pack . B.unpack . ("0x"<>) . B16.encode . unAddress
+    fromEthHexString s = do
+        uf <- fromEthHexString s
+        case parse decode (unUnformatted uf) of
             Done "" h -> pure h
             _ -> mzero
 
-instance EthHex Address where
-    fromEthHexString = decode . BL.pack . show
+instance Marshal Address where
+    decode = Address <$> take 20
+    encode = unAddress
+
+instance ToJSON Address where
+    toJSON = toJSON . Unformatted . encode
+
+instance FromJSON Address where
+    parseJSON (String s) = maybe mzero pure (fromEthHexString s)
+    parseJSON _ = mzero
 
 mkAddress :: B.ByteString -> Maybe Address
 mkAddress s | B.length s == 20 = Just (Address s)
@@ -138,29 +158,35 @@ newtype Hash
     deriving Eq
 
 instance Show Hash where
-    show (Hash h) = "Hash { fromEthHexString = " <> show ("0x" <> B16.encode h) <> " }"
+    show h = "Hash { fromEthHexString = " <> T.unpack (toEthHexString h) <> " }"
 
-instance Marshal Hash where
-    fromUnformatted = Hash <$> take 32
-    toUnformatted = Unformatted . unHash
-
-instance ToJSON Hash where
-    toJSON = toJSON . toUnformatted
-
-instance FromJSON Hash where
-    parseJSON v = do
-        uf <- parseJSON v
-        case parse fromUnformatted (unUnformatted uf) of
+instance EthHex Hash where
+    toEthHexString = T.toLower . T.pack . B.unpack . ("0x"<>) . B16.encode . unHash
+    fromEthHexString s = do
+        uf <- fromEthHexString s
+        case parse decode (unUnformatted uf) of
             Done "" h -> pure h
             _ -> mzero
 
-instance EthHex Hash where
-    fromEthHexString = decode . BL.pack . show
+instance Marshal Hash where
+    decode = Hash <$> take 32
+    encode = unHash
+
+instance ToJSON Hash where
+    toJSON = toJSON . Unformatted . encode
+
+instance FromJSON Hash where
+    parseJSON (String s) = maybe mzero pure (fromEthHexString s)
+    parseJSON _ = mzero
 
 mkHash :: B.ByteString -> Maybe Hash
 mkHash s | B.length s == 32 = Just (Hash s)
 mkHash _ = Nothing
 
+--
+-- Signature
+--
+    
 --
 -- Event
 --
@@ -548,6 +574,107 @@ data FilterResult
 instance FromJSON FilterResult where
     parseJSON v = (Hashes <$> parseJSON v) <|> (Events <$> parseJSON v)
 
+--
+-- Marshal instances
+--
+
+instance Marshal Bool where
+    decode = do
+        n <- (decode :: Parser Word8)
+        case n of
+            0 -> pure False
+            1 -> pure True
+            _ -> mzero
+    encode True = encode (1 :: Word8)
+    encode False = encode (0 :: Word8)
+
+instance Marshal Int8 where
+    decode = do
+        bs <- take 32
+        (pure . fromIntegral) (bs2i bs)
+    encode = encodeInt
+
+instance Marshal Int16 where
+    decode = do
+        bs <- take 32
+        (pure . fromIntegral) (bs2i bs)
+    encode = encodeInt
+
+instance Marshal Int32 where
+    decode = do
+        bs <- take 32
+        (pure . fromIntegral) (bs2i bs)
+    encode = encodeInt
+
+instance Marshal Int64 where
+    decode = do
+        bs <- take 64
+        (pure . fromIntegral) (bs2i bs)
+    encode = encodeInt
+
+instance Marshal Word8 where
+    decode = do
+        bs <- take 32
+        (pure . fromIntegral) (bs2i bs)
+    encode = encodeInt
+
+instance Marshal Word16 where
+    decode = do
+        bs <- take 32
+        (pure . fromIntegral) (bs2i bs)
+    encode = encodeInt
+
+instance Marshal Word32 where
+    decode = do
+        bs <- take 32
+        (pure . fromIntegral) (bs2i bs)
+    encode = encodeInt
+
+instance Marshal Word64 where
+    decode = do
+        bs <- take 64
+        (pure . fromIntegral) (bs2i bs)
+    encode = encodeInt
+
+encodeInt :: Integral a => a -> BS.ByteString
+encodeInt i
+    | i >= 0 = padL 32 (i2bs $ fromIntegral i)
+    | otherwise = BS.pack (complement <$> bx)
+        where bx = BS.unpack (padL 32 . i2bs . fromIntegral $ abs i - 1)
+
+padL :: Int -> BS.ByteString -> BS.ByteString
+padL n bs
+    | BS.length bs < n = BS.replicate (n - BS.length bs) 0 <> bs
+    | otherwise = BS.replicate (n - mod n (BS.length bs)) 0 <> bs
+
+bs2i :: BS.ByteString -> Integer
+bs2i b
+    | sign = go b - 2 ^ (BS.length b * 8)
+    | otherwise = go b
+    where
+    go = BS.foldl' (\i b' -> (i `shiftL` 8) + fromIntegral b') 0
+    sign = BS.index b 0 > 127
+
+i2bs :: Integer -> BS.ByteString
+i2bs x
+    | x == 0 = BS.singleton 0
+    | x < 0 = i2bs $ 2 ^ (8 * bytes) + x
+    | otherwise = BS.reverse $ BS.unfoldr go x
+    where
+    bytes = (integerLogBase 2 (abs x) + 1) `quot` 8 + 1
+    go i =
+        if i == 0 then Nothing
+        else Just (fromIntegral i, i `shiftR` 8)
+
+integerLogBase :: Integer -> Integer -> Int
+integerLogBase b i =
+    if i < b then
+        0
+    else
+        let l = 2 * integerLogBase (b*b) i
+            doDiv :: Integer -> Int -> Int
+            doDiv i' l' = if i' < b then l' else doDiv (i' `div` b) (l'+1)
+        in doDiv (i `div` (b^l)) l
 
 --
 -- Utility
