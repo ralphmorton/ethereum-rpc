@@ -155,7 +155,7 @@ eth_getUncleCountByBlockNumber block = rpc "eth_getUncleCountByBlockNumber" [toJ
 eth_getCode :: RpcC c m => Address -> BlockRef -> m (CallResult Unformatted)
 eth_getCode addr block = rpc "eth_getCode" [toJSON addr, toJSON block]
 
-eth_sign :: RpcC c m => Address -> Unformatted -> m (CallResult Unformatted)
+eth_sign :: RpcC c m => Address -> Unformatted -> m (CallResult Signature)
 eth_sign addr dta = rpc "eth_sign" [toJSON addr, toJSON dta]
 
 eth_sendTransaction :: RpcC c m => TransactionIn -> m (CallResult Hash)

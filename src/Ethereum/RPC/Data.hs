@@ -14,12 +14,14 @@ module Ethereum.RPC.Data (
     Bytes,
     unBytes,
     mkBytes,
+    Function(..),
     Address,
     unAddress,
     mkAddress,
     Hash,
     unHash,
     mkHash,
+    Signature(..),
     Event(..),
     Network(..),
     SyncStatus(..),
@@ -128,7 +130,21 @@ instance FromJSON Unformatted where
 
 newtype Bytes (n :: Nat)
     = Bytes { unBytes :: BS.ByteString }
-    deriving (Eq, Show)
+    deriving Eq
+
+instance (KnownNat n, n <= 31) => Show (Bytes n) where
+    show bx = "Bytes { toEthHexString = " <> T.unpack (toEthHexString bx) <> " }"
+
+instance (KnownNat n, n <= 31) => EthHex (Bytes n) where
+    toEthHexString = T.toLower . T.pack . B.unpack . ("0x"<>) . B16.encode . padR 32 . unBytes
+    fromEthHexString s = do
+        let proxy = undefined :: KnownNat n => Bytes n
+        let n = fromIntegral (natVal proxy)
+        let encoded = (B.pack . T.unpack . T.take (n * 2)) (T.drop 2 s)
+        let rest = T.drop (n * 2 + 2) s
+        case (B16.decode encoded, rest == T.replicate (64 - n * 2) "0") of
+            ((bs, ""), True) -> pure (setBytes proxy bs)
+            _ -> mzero
 
 instance (KnownNat n, n <= 31) => Marshal (Bytes n) where
     decode = do
@@ -149,6 +165,25 @@ mkBytes bs
 
 setBytes :: Bytes n -> BS.ByteString -> Bytes n
 setBytes _ = Bytes
+
+--
+-- Function
+--
+
+newtype Function
+    = Function { unFunction :: Bytes 24 }
+    deriving Eq
+
+instance Show Function where
+    show (Function bx) = "Function { toEthHexString = " <> T.unpack (toEthHexString bx) <> " }"
+
+instance EthHex Function where
+    toEthHexString = toEthHexString . unFunction
+    fromEthHexString = fmap Function . fromEthHexString
+
+instance Marshal Function where
+    decode = Function <$> decode
+    encode = encode . unFunction
 
 --
 -- Address
@@ -221,7 +256,49 @@ mkHash _ = Nothing
 --
 -- Signature
 --
+
+data Signature = Signature {
+    sigR :: Integer,
+    sigS :: Integer,
+    sigV :: Word8
+} deriving (Eq, Show)
     
+instance EthHex Signature where
+    toEthHexString sig = toEthHexString (Unformatted bs)
+        where
+        bs = r <> s <> v
+        r = encodeInt (sigR sig)
+        s = encodeInt (sigS sig)
+        v = i2bs (fromIntegral $ sigV sig)
+    fromEthHexString str = do
+        Unformatted bs <- fromEthHexString str
+        case BS.length bs == 65 of
+            False -> mzero
+            True -> do
+                let r = bs2i (BS.take 32 bs)
+                let s = bs2i (BS.take 32 $ BS.drop 32 bs)
+                let v = fromIntegral $ bs2i (BS.drop 64 bs)
+                pure (Signature r s v)
+
+instance Marshal Signature where
+    decode = do
+        r <- bs2i <$> take 32
+        s <- bs2i <$> take 32
+        v <- fromIntegral . bs2i <$> take 1
+        pure (Signature r s v)
+    encode sig = r <> s <> v
+        where
+        r = encodeInt (sigR sig)
+        s = encodeInt (sigS sig)
+        v = i2bs (fromIntegral $ sigV sig)
+
+instance ToJSON Signature where
+    toJSON = toJSON . Unformatted . encode
+
+instance FromJSON Signature where
+    parseJSON (String s) = maybe mzero pure (fromEthHexString s)
+    parseJSON _ = mzero 
+
 --
 -- Event
 --
