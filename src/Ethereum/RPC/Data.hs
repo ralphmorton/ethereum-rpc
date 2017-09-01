@@ -199,17 +199,17 @@ instance Show Address where
 instance EthHex Address where
     toEthHexString = T.toLower . T.pack . B.unpack . ("0x"<>) . B16.encode . unAddress
     fromEthHexString s = do
-        uf <- fromEthHexString s
-        case parse decode (unUnformatted uf) of
-            Done "" h -> pure h
+        Unformatted bs <- fromEthHexString s
+        case BS.length bs of
+            20 -> pure (Address bs)
             _ -> mzero
 
 instance Marshal Address where
-    decode = Address <$> take 20
-    encode = unAddress
+    decode = Address . BS.drop 12 <$> take 32
+    encode = padL 32 . unAddress
 
 instance ToJSON Address where
-    toJSON = toJSON . Unformatted . encode
+    toJSON = toJSON . toEthHexString
 
 instance FromJSON Address where
     parseJSON (String s) = maybe mzero pure (fromEthHexString s)
@@ -233,9 +233,9 @@ instance Show Hash where
 instance EthHex Hash where
     toEthHexString = T.toLower . T.pack . B.unpack . ("0x"<>) . B16.encode . unHash
     fromEthHexString s = do
-        uf <- fromEthHexString s
-        case parse decode (unUnformatted uf) of
-            Done "" h -> pure h
+        Unformatted bs <- fromEthHexString s
+        case BS.length bs of
+            32 -> pure (Hash bs)
             _ -> mzero
 
 instance Marshal Hash where
@@ -243,7 +243,7 @@ instance Marshal Hash where
     encode = unHash
 
 instance ToJSON Hash where
-    toJSON = toJSON . Unformatted . encode
+    toJSON = toJSON . toEthHexString
 
 instance FromJSON Hash where
     parseJSON (String s) = maybe mzero pure (fromEthHexString s)
