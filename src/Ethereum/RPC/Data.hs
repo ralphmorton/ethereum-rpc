@@ -1,4 +1,5 @@
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TypeFamilies #-}
@@ -6,7 +7,7 @@
 
 module Ethereum.RPC.Data (
     EthHex(..),
-    Marshal(..),
+    ABI(..),
     Quantity,
     unQuantity,
     mkQuantity,
@@ -42,7 +43,7 @@ import Prelude hiding (take)
 
 import Control.Applicative ((<|>))
 import Control.Monad (mzero, void, when)
-import Data.Aeson hiding (decode, encode)
+import Data.Aeson hiding (decode, decode', encode)
 import Data.Attoparsec.ByteString hiding (takeWhile)
 import Data.Bits
 import qualified Data.ByteString.Base16 as B16
@@ -50,6 +51,7 @@ import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as B
 import Data.Int
 import Data.Monoid (Monoid, (<>))
+import Data.Proxy
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
 import Data.Word
@@ -60,7 +62,8 @@ class EthHex a where
     toEthHexString :: a -> T.Text
     fromEthHexString :: T.Text -> Maybe a
 
-class Marshal a where
+class ABI a where
+    dynamic :: Proxy a -> Bool
     decode :: Parser a
     encode :: a -> BS.ByteString
 
@@ -132,10 +135,10 @@ newtype Bytes (n :: Nat)
     = Bytes { unBytes :: BS.ByteString }
     deriving Eq
 
-instance (KnownNat n, n <= 31) => Show (Bytes n) where
+instance (KnownNat n, n <= 32) => Show (Bytes n) where
     show bx = "Bytes { toEthHexString = " <> T.unpack (toEthHexString bx) <> " }"
 
-instance (KnownNat n, n <= 31) => EthHex (Bytes n) where
+instance (KnownNat n, n <= 32) => EthHex (Bytes n) where
     toEthHexString = T.toLower . T.pack . B.unpack . ("0x"<>) . B16.encode . padR 32 . unBytes
     fromEthHexString s = do
         let proxy = undefined :: KnownNat n => Bytes n
@@ -146,7 +149,8 @@ instance (KnownNat n, n <= 31) => EthHex (Bytes n) where
             ((bs, ""), True) -> pure (setBytes proxy bs)
             _ -> mzero
 
-instance (KnownNat n, n <= 31) => Marshal (Bytes n) where
+instance (KnownNat n, n <= 32) => ABI (Bytes n) where
+    dynamic = const False
     decode = do
         let proxy = undefined :: KnownNat n => Bytes n
         let n = fromIntegral (natVal proxy)
@@ -155,7 +159,7 @@ instance (KnownNat n, n <= 31) => Marshal (Bytes n) where
         pure (setBytes proxy bs)
     encode = padR 32 . unBytes
 
-mkBytes :: (KnownNat n, n <= 31) => BS.ByteString -> Maybe (Bytes n)
+mkBytes :: (KnownNat n, n <= 32) => BS.ByteString -> Maybe (Bytes n)
 mkBytes bs
     | BS.length bs == n = Just (setBytes proxy bs)
     | otherwise = Nothing
@@ -181,7 +185,8 @@ instance EthHex Function where
     toEthHexString = toEthHexString . unFunction
     fromEthHexString = fmap Function . fromEthHexString
 
-instance Marshal Function where
+instance ABI Function where
+    dynamic = const False
     decode = Function <$> decode
     encode = encode . unFunction
 
@@ -204,7 +209,8 @@ instance EthHex Address where
             20 -> pure (Address bs)
             _ -> mzero
 
-instance Marshal Address where
+instance ABI Address where
+    dynamic = const False
     decode = Address . BS.drop 12 <$> take 32
     encode = padL 32 . unAddress
 
@@ -238,7 +244,8 @@ instance EthHex Hash where
             32 -> pure (Hash bs)
             _ -> mzero
 
-instance Marshal Hash where
+instance ABI Hash where
+    dynamic = const False
     decode = Hash <$> take 32
     encode = unHash
 
@@ -280,20 +287,8 @@ instance EthHex Signature where
                 let v = fromIntegral $ bs2i (BS.drop 64 bs)
                 pure (Signature r s v)
 
-instance Marshal Signature where
-    decode = do
-        r <- bs2i <$> take 32
-        s <- bs2i <$> take 32
-        v <- fromIntegral . bs2i <$> take 1
-        pure (Signature r s v)
-    encode sig = r <> s <> v
-        where
-        r = encodeInt (sigR sig)
-        s = encodeInt (sigS sig)
-        v = i2bs (fromIntegral $ sigV sig)
-
 instance ToJSON Signature where
-    toJSON = toJSON . Unformatted . encode
+    toJSON = toJSON . toEthHexString
 
 instance FromJSON Signature where
     parseJSON (String s) = maybe mzero pure (fromEthHexString s)
@@ -690,13 +685,108 @@ instance FromJSON FilterResult where
 -- Marshal instances
 --
 
-instance Marshal a => Marshal [a] where
+instance (ABI a, ABI b, ABI c, ABI d, ABI e) => ABI (a, b, c, d, e) where
+    dynamic = const True
+    decode = do
+        ha <- decodeH Proxy
+        hb <- decodeH Proxy
+        hc <- decodeH Proxy
+        hd <- decodeH Proxy
+        he <- decodeH Proxy
+        a <- maybe decode pure ha
+        b <- maybe decode pure hb
+        c <- maybe decode pure hc
+        d <- maybe decode pure hd
+        e <- maybe decode pure he
+        pure (a, b, c, d, e)
+    encode (a, b, c, d, e) = ha <> hb <> hc <> hd <> he <> ta <> tb <> tc <> td <> te
+        where
+        (ha, ta) = encodeHT 64 a
+        aLen = BS.length (ha <> ta) - 32 + 64
+        (hb, tb) = encodeHT (fromIntegral aLen) b
+        bLen = BS.length (hb <> tb) - 32 + aLen
+        (hc, tc) = encodeHT (fromIntegral bLen) c 
+        cLen = BS.length (hc <> tc) - 32 + bLen
+        (hd, td) = encodeHT (fromIntegral cLen) d 
+        dLen = BS.length (hd <> td) - 32 + cLen
+        (he, te) = encodeHT (fromIntegral dLen) e
+
+instance (ABI a, ABI b, ABI c, ABI d) => ABI (a, b, c, d) where
+    dynamic = const True
+    decode = do
+        ha <- decodeH Proxy
+        hb <- decodeH Proxy
+        hc <- decodeH Proxy
+        hd <- decodeH Proxy
+        a <- maybe decode pure ha
+        b <- maybe decode pure hb
+        c <- maybe decode pure hc
+        d <- maybe decode pure hd
+        pure (a, b, c, d)
+    encode (a, b, c, d) = ha <> hb <> hc <> hd <> ta <> tb <> tc <> td
+        where
+        (ha, ta) = encodeHT 64 a
+        aLen = BS.length (ha <> ta) - 32 + 64
+        (hb, tb) = encodeHT (fromIntegral aLen) b
+        bLen = BS.length (hb <> tb) - 32 + aLen
+        (hc, tc) = encodeHT (fromIntegral bLen) c 
+        cLen = BS.length (hc <> tc) - 32 + bLen
+        (hd, td) = encodeHT (fromIntegral cLen) d 
+
+instance (ABI a, ABI b, ABI c) => ABI (a, b, c) where
+    dynamic = const True
+    decode = do
+        ha <- decodeH Proxy
+        hb <- decodeH Proxy
+        hc <- decodeH Proxy
+        a <- maybe decode pure ha
+        b <- maybe decode pure hb
+        c <- maybe decode pure hc
+        pure (a, b, c)
+    encode (a, b, c) = ha <> hb <> hc <> ta <> tb <> tc
+        where
+        (ha, ta) = encodeHT 64 a
+        aLen = BS.length (ha <> ta) - 32 + 64
+        (hb, tb) = encodeHT (fromIntegral aLen) b
+        bLen = BS.length (ha <> ta) - 32 + aLen
+        (hc, tc) = encodeHT (fromIntegral bLen) c 
+
+instance (ABI a, ABI b) => ABI (a, b) where
+    dynamic = const True
+    decode = do
+        ha <- decodeH Proxy
+        hb <- decodeH Proxy
+        a <- maybe decode pure ha
+        b <- maybe decode pure hb
+        pure (a, b)
+    encode (a, b) = ha <> hb <> ta <> tb
+        where
+        (ha, ta) = encodeHT 64 a
+        aLen = BS.length (ha <> ta) - 32 + 64
+        (hb, tb) = encodeHT (fromIntegral aLen) b
+
+decodeH :: ABI a => Proxy a -> Parser (Maybe a)
+decodeH p
+    | dynamic p = take 32 *> pure Nothing
+    | otherwise = Just <$> decode
+
+encodeHT :: ABI a => Word64 -> a -> (BS.ByteString, BS.ByteString)
+encodeHT offset v = case dynamic (prox v) of
+    False -> (encode v, "")
+    True -> (encode offset, encode v)
+
+prox :: a -> Proxy a
+prox = const Proxy
+
+instance ABI a => ABI [a] where
+    dynamic = const True
     decode = do
         n <- fromIntegral . bs2i <$> take 32
         count n decode
     encode ax = encodeInt (length ax) <> mconcat (encode <$> ax)
 
-instance Marshal B.ByteString where
+instance ABI B.ByteString where
+    dynamic = const True
     decode = do
         n <- fromIntegral . bs2i <$> take 32
         bs <- take n
@@ -708,11 +798,13 @@ instance Marshal B.ByteString where
             | otherwise = 32 - mod n 32
     encode bs = encodeInt (BS.length bs) <> padR 32 bs
 
-instance Marshal T.Text where
+instance ABI T.Text where
+    dynamic = const True
     decode = T.decodeUtf8 <$> decode
     encode = encode . T.encodeUtf8
 
-instance Marshal Bool where
+instance ABI Bool where
+    dynamic = const False
     decode = do
         n <- (decode :: Parser Word8)
         case n of
@@ -722,49 +814,57 @@ instance Marshal Bool where
     encode True = encode (1 :: Word8)
     encode False = encode (0 :: Word8)
 
-instance Marshal Int8 where
+instance ABI Int8 where
+    dynamic = const False
     decode = do
         bs <- take 32
         (pure . fromIntegral) (bs2i bs)
     encode = encodeInt
 
-instance Marshal Int16 where
+instance ABI Int16 where
+    dynamic = const False
     decode = do
         bs <- take 32
         (pure . fromIntegral) (bs2i bs)
     encode = encodeInt
 
-instance Marshal Int32 where
+instance ABI Int32 where
+    dynamic = const False
     decode = do
         bs <- take 32
         (pure . fromIntegral) (bs2i bs)
     encode = encodeInt
 
-instance Marshal Int64 where
+instance ABI Int64 where
+    dynamic = const False
     decode = do
         bs <- take 32
         (pure . fromIntegral) (bs2i bs)
     encode = encodeInt
 
-instance Marshal Word8 where
+instance ABI Word8 where
+    dynamic = const False
     decode = do
         bs <- take 32
         (pure . fromIntegral) (bs2i bs)
     encode = encodeInt
 
-instance Marshal Word16 where
+instance ABI Word16 where
+    dynamic = const False
     decode = do
         bs <- take 32
         (pure . fromIntegral) (bs2i bs)
     encode = encodeInt
 
-instance Marshal Word32 where
+instance ABI Word32 where
+    dynamic = const False
     decode = do
         bs <- take 32
         (pure . fromIntegral) (bs2i bs)
     encode = encodeInt
 
-instance Marshal Word64 where
+instance ABI Word64 where
+    dynamic = const False
     decode = do
         bs <- take 32
         (pure . fromIntegral) (bs2i bs)
